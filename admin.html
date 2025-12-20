@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panneau d'Administration - Jimmy School</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f7f9; color: #333; margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        #auth-container, #admin-dashboard { display: none; }
+        #auth-container.active, #admin-dashboard.active { display: block; }
+        .login-form { max-width: 400px; margin: 40px auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+        input { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { background-color: #3498db; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px; }
+        button:hover { background-color: #2980b9; }
+        #logout-button { background-color: #e74c3c; position: absolute; top: 20px; right: 20px; width: auto; }
+        .dashboard-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .section { padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }
+        th { background-color: #f2f2f2; }
+        .loader { text-align: center; padding: 40px; }
+        .error { color: #e74c3c; text-align: center; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Panneau d'Administration - Jimmy School</h1>
+
+        <!-- Login Form -->
+        <div id="auth-container" class="active">
+            <div class="login-form">
+                <h2>Connexion Administrateur</h2>
+                <div id="login-error" class="error"></div>
+                <input type="email" id="email" placeholder="Email" required>
+                <input type="password" id="password" placeholder="Mot de passe" required>
+                <button id="login-button">Se connecter</button>
+            </div>
+        </div>
+
+        <!-- Admin Dashboard -->
+        <div id="admin-dashboard">
+            <button id="logout-button">Déconnexion</button>
+            <p>Bienvenue, <span id="admin-email"></span>!</p>
+
+            <div style="background-color: #fffbe6; border: 1px solid #ffe58f; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                <h3 style="margin-top: 0;">Instructions d'Utilisation</h3>
+                <p>Ce panneau vous donne un accès direct à la base de données. Les modifications sont instantanées et irréversibles.</p>
+                <ol>
+                    <li><strong>Configuration :</strong> Avant la première utilisation, vous devez remplacer les placeholders `YOUR_API_KEY`, `YOUR_AUTH_DOMAIN`, etc., dans le code source de ce fichier par la configuration de votre projet Firebase.</li>
+                    <li><strong>Connexion :</strong> Connectez-vous avec un compte utilisateur qui a le rôle `admin` dans la base de données Firestore.</li>
+                    <li><strong>Sécurité :</strong> Assurez-vous que vos <a href="https://console.firebase.google.com/project/_/firestore/rules" target="_blank">Règles de Sécurité Firestore</a> sont correctement configurées pour restreindre l'accès en écriture aux administrateurs.</li>
+                </ol>
+            </div>
+
+            <div class="dashboard-sections">
+                <!-- User Management -->
+                <div class="section" id="users-section">
+                    <h2>Gestion des Utilisateurs</h2>
+                    <div id="users-list"></div>
+                </div>
+
+                <!-- KYC Management -->
+                <div class="section" id="kyc-section">
+                    <h2>Demandes de Vérification (KYC)</h2>
+                    <div id="kyc-list"></div>
+                </div>
+
+                <!-- Course Management -->
+                <div class="section" id="courses-section">
+                    <h2>Gestion des Cours</h2>
+                    <div id="courses-list"></div>
+                </div>
+
+                <!-- Transactions -->
+                <div class="section" id="transactions-section">
+                    <h2>Transactions</h2>
+                    <div id="transactions-list"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-firestore-compat.js"></script>
+
+    <script>
+        // --- Firebase Configuration ---
+        // IMPORTANT: Replace with your web app's Firebase configuration
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        // --- DOM Elements ---
+        const authContainer = document.getElementById('auth-container');
+        const adminDashboard = document.getElementById('admin-dashboard');
+        const loginButton = document.getElementById('login-button');
+        const logoutButton = document.getElementById('logout-button');
+        const emailInput = document.getElementById('email');
+        const passwordInput = document.getElementById('password');
+        const loginError = document.getElementById('login-error');
+        const adminEmailSpan = document.getElementById('admin-email');
+
+        // --- Main Logic ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // Check auth state
+            auth.onAuthStateChanged(user => {
+                if (user) {
+                    // User is signed in, check if they are an admin
+                    checkAdminRole(user);
+                } else {
+                    // User is signed out
+                    showLogin();
+                }
+            });
+
+            // Event Listeners
+            loginButton.addEventListener('click', handleLogin);
+            logoutButton.addEventListener('click', handleLogout);
+        });
+
+        async function checkAdminRole(user) {
+            const userDoc = await db.collection('users').doc(user.uid).get();
+            if (userDoc.exists && userDoc.data().role === 'admin') {
+                showDashboard(user);
+                loadAllData();
+            } else {
+                handleLogout("Accès refusé. Vous n'êtes pas un administrateur.");
+            }
+        }
+
+        function showLogin(error = '') {
+            authContainer.classList.add('active');
+            adminDashboard.classList.remove('active');
+            if (error) {
+                loginError.textContent = error;
+            }
+        }
+
+        function showDashboard(user) {
+            authContainer.classList.remove('active');
+            adminDashboard.classList.add('active');
+            adminEmailSpan.textContent = user.email;
+        }
+
+        async function handleLogin() {
+            const email = emailInput.value;
+            const password = passwordInput.value;
+            loginError.textContent = '';
+
+            try {
+                await auth.signInWithEmailAndPassword(email, password);
+                // Auth state change will handle the rest
+            } catch (error) {
+                loginError.textContent = "Erreur de connexion : " + error.message;
+            }
+        }
+
+        async function handleLogout(message = '') {
+            await auth.signOut();
+            showLogin(message);
+        }
+
+        function loadAllData() {
+            loadUsers();
+            loadCourses();
+            loadKycRequests();
+            loadTransactions();
+        }
+
+        // --- User Management ---
+        async function loadUsers() {
+            const usersListDiv = document.getElementById('users-list');
+            usersListDiv.innerHTML = '<div class="loader">Chargement des utilisateurs...</div>';
+
+            try {
+                const snapshot = await db.collection('users').get();
+                const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                let table = '<table><tr><th>Email</th><th>Rôle</th><th>Actions</th></tr>';
+                users.forEach(user => {
+                    table += `
+                        <tr>
+                            <td>${user.email}</td>
+                            <td>
+                                <select id="role-${user.id}" onchange="updateUserRole('${user.id}')">
+                                    <option value="student" ${user.role === 'student' ? 'selected' : ''}>Étudiant</option>
+                                    <option value="teacher" ${user.role === 'teacher' ? 'selected' : ''}>Formateur</option>
+                                    <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option>
+                                </select>
+                            </td>
+                            <td><button onclick="saveUserRole('${user.id}')">Sauvegarder</button></td>
+                        </tr>
+                    `;
+                });
+                table += '</table>';
+                usersListDiv.innerHTML = table;
+            } catch (error) {
+                usersListDiv.innerHTML = '<div class="error">Erreur de chargement des utilisateurs.</div>';
+                console.error("Error loading users:", error);
+            }
+        }
+
+        async function updateUserRole(userId) {
+            // This function is just a placeholder for visual feedback.
+            // The actual update happens in saveUserRole.
+        }
+
+        async function saveUserRole(userId) {
+            const select = document.getElementById(`role-${userId}`);
+            const newRole = select.value;
+
+            try {
+                await db.collection('users').doc(userId).update({ role: newRole });
+                alert(`Rôle de l'utilisateur ${userId} mis à jour à ${newRole}`);
+                loadUsers(); // Refresh the list
+            } catch (error) {
+                alert("Erreur lors de la mise à jour du rôle.");
+                console.error("Error updating user role:", error);
+            }
+        }
+
+        // --- Course Management ---
+        async function loadCourses() {
+            const coursesListDiv = document.getElementById('courses-list');
+            coursesListDiv.innerHTML = '<div class="loader">Chargement des cours...</div>';
+
+            try {
+                const snapshot = await db.collection('courses').get();
+                const courses = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                let table = '<table><tr><th>Titre</th><th>Prix</th><th>Publié</th><th>Actions</th></tr>';
+                courses.forEach(course => {
+                    table += `
+                        <tr>
+                            <td><input type="text" id="title-${course.id}" value="${course.title || ''}"></td>
+                            <td><input type="number" id="price-${course.id}" value="${course.price || 0}"></td>
+                            <td><input type="checkbox" id="published-${course.id}" ${course.isPublished ? 'checked' : ''}></td>
+                            <td>
+                                <button onclick="saveCourse('${course.id}')">Sauvegarder</button>
+                                <button onclick="deleteCourse('${course.id}')" style="background-color: #e74c3c;">Supprimer</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                table += '</table>';
+                coursesListDiv.innerHTML = table;
+            } catch (error) {
+                coursesListDiv.innerHTML = '<div class="error">Erreur de chargement des cours.</div>';
+                console.error("Error loading courses:", error);
+            }
+        }
+
+        async function saveCourse(courseId) {
+            const title = document.getElementById(`title-${courseId}`).value;
+            const price = parseFloat(document.getElementById(`price-${courseId}`).value);
+            const isPublished = document.getElementById(`published-${courseId}`).checked;
+
+            try {
+                await db.collection('courses').doc(courseId).update({
+                    title: title,
+                    price: price,
+                    isPublished: isPublished
+                });
+                alert(`Cours ${courseId} mis à jour.`);
+                loadCourses(); // Refresh
+            } catch (error) {
+                alert("Erreur lors de la mise à jour du cours.");
+                console.error("Error updating course:", error);
+            }
+        }
+
+        async function deleteCourse(courseId) {
+            if (confirm(`Êtes-vous sûr de vouloir supprimer le cours ${courseId} ? Cette action est irréversible.`)) {
+                try {
+                    await db.collection('courses').doc(courseId).delete();
+                    alert(`Cours ${courseId} supprimé.`);
+                    loadCourses(); // Refresh
+                } catch (error) {
+                    alert("Erreur lors de la suppression du cours.");
+                    console.error("Error deleting course:", error);
+                }
+            }
+        }
+
+        // --- KYC Management ---
+        async function loadKycRequests() {
+            const kycListDiv = document.getElementById('kyc-list');
+            kycListDiv.innerHTML = '<div class="loader">Chargement des demandes KYC...</div>';
+
+            try {
+                const snapshot = await db.collection('kyc').where('status', '==', 'pending').get();
+                const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                if (requests.length === 0) {
+                    kycListDiv.innerHTML = "<p>Aucune demande de vérification en attente.</p>";
+                    return;
+                }
+
+                let table = '<table><tr><th>User ID</th><th>Document</th><th>Actions</th></tr>';
+                requests.forEach(req => {
+                    table += `
+                        <tr>
+                            <td>${req.uid}</td>
+                            <td><a href="${req.frontUrl}" target="_blank">Voir le document</a></td>
+                            <td>
+                                <button onclick="handleKycRequest('${req.id}', '${req.uid}', 'approved')" style="background-color: #2ecc71;">Approuver</button>
+                                <button onclick="handleKycRequest('${req.id}', '${req.uid}', 'rejected')" style="background-color: #e74c3c;">Rejeter</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                table += '</table>';
+                kycListDiv.innerHTML = table;
+            } catch (error) {
+                kycListDiv.innerHTML = '<div class="error">Erreur de chargement des demandes KYC.</div>';
+                console.error("Error loading KYC requests:", error);
+            }
+        }
+
+        async function handleKycRequest(kycId, userId, newStatus) {
+            if (!confirm(`Êtes-vous sûr de vouloir ${newStatus === 'approved' ? 'approuver' : 'rejeter'} cette demande ?`)) {
+                return;
+            }
+
+            try {
+                // Start a batch to perform multiple writes atomically
+                const batch = db.batch();
+
+                // 1. Update the KYC document status
+                const kycRef = db.collection('kyc').doc(kycId);
+                batch.update(kycRef, { status: newStatus });
+
+                // 2. Update the user's teacherStatus
+                const userRef = db.collection('users').doc(userId);
+                batch.update(userRef, { teacherStatus: newStatus, role: newStatus === 'approved' ? 'teacher' : 'student' });
+
+                // Commit the batch
+                await batch.commit();
+
+                alert(`Demande KYC ${kycId} mise à jour à ${newStatus}.`);
+                loadKycRequests(); // Refresh the list
+                loadUsers(); // Also refresh the user list to show the role change
+            } catch (error) {
+                alert("Erreur lors du traitement de la demande KYC.");
+                console.error("Error handling KYC request:", error);
+            }
+        }
+
+        // --- Transaction Management ---
+        async function loadTransactions() {
+            const transactionsListDiv = document.getElementById('transactions-list');
+            transactionsListDiv.innerHTML = '<div class="loader">Chargement des transactions...</div>';
+
+            try {
+                const snapshot = await db.collection('purchases').orderBy('createdAt', 'desc').limit(50).get();
+                const transactions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                if (transactions.length === 0) {
+                    transactionsListDiv.innerHTML = "<p>Aucune transaction trouvée.</p>";
+                    return;
+                }
+
+                let table = '<table><tr><th>Date</th><th>User ID</th><th>Course ID</th><th>Montant</th><th>Status</th></tr>';
+                transactions.forEach(tx => {
+                    const date = tx.createdAt ? new Date(tx.createdAt.seconds * 1000).toLocaleString() : 'N/A';
+                    table += `
+                        <tr>
+                            <td>${date}</td>
+                            <td>${tx.userId}</td>
+                            <td>${tx.courseId}</td>
+                            <td>${tx.amount} ${tx.currency || ''}</td>
+                            <td>${tx.status}</td>
+                        </tr>
+                    `;
+                });
+                table += '</table>';
+                transactionsListDiv.innerHTML = table;
+            } catch (error) {
+                transactionsListDiv.innerHTML = '<div class="error">Erreur de chargement des transactions.</div>';
+                console.error("Error loading transactions:", error);
+            }
+        }
+
+    </script>
+
+</body>
+</html>
