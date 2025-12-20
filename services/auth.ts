@@ -66,5 +66,27 @@ export const authService = {
       user: userDoc.data() as User,
       token: tokenRes.access_token
     };
+  },
+
+  async getCurrentUser(token: string): Promise<User | null> {
+    try {
+      // Get current user from Supabase
+      const userRes = await supabaseRequest<{ id: string }>(`/auth/v1/user`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      // Get full profile from Firestore
+      const userDoc = await getDoc(doc(db, 'users', userRes.id));
+      if (!userDoc.exists()) {
+        return null;
+      }
+
+      return userDoc.data() as User;
+    } catch (error) {
+      console.error('Error getting current user:', error);
+      return null;
+    }
   }
 };

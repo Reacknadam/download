@@ -11,7 +11,7 @@ export const workerApi = {
         courseId,
         amount,
         currency: 'USD',
-        returnUrl: window.location.origin + '/#/payment-return', // Redirect back to our SPA
+        returnUrl: `${WORKER_ROOT}/payment-return`, // Point vers le worker pour le polling
       }),
     });
     if (!res.ok) throw new Error('Failed to init payment');

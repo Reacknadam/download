@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore, initializeFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: "AIzaSyD_cJ0z0QysF-w4f0FsUXIQS4CHQndcM5Y",
@@ -19,5 +20,6 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 // This often fixes "Service firestore is not available" on CDNs
 const db = initializeFirestore(app, {}); 
 const storage = getStorage(app);
+const auth = getAuth(app);
 
-export { db, storage };
+export { db, storage, auth };

@@ -1,8 +1,11 @@
 export interface User {
   uid: string;
   email: string;
-  displayName: string;
-  role: 'student' | 'teacher' | 'admin';
+  displayName?: string;
+  phoneNumber?: string;
+  bio?: string;
+  role?: 'student' | 'teacher' | 'admin';
+  isTeacherVerified?: boolean;
   photoURL?: string;
   teacherStatus?: 'pending' | 'approved' | 'rejected';
   createdAt?: any;
@@ -61,4 +64,44 @@ export interface ChatMessage {
   sender: 'user' | 'ai';
   text: string;
   timestamp: Date;
+}
+
+export interface Playlist {
+  id: string;
+  title: string;
+  description?: string;
+  teacherId: string;
+  teacherName: string;
+  thumbnailUrl: string;
+  totalDuration?: number;
+  courseCount: number;
+  viewCount: number;
+  saleCount?: number;
+  isPublished?: boolean;
+  isPublic?: boolean;
+  createdAt?: any;
+  price?: number;
+  videos?: Array<{
+    title: string;
+    description: string;
+    videoUrl: string;
+    bunnyVideoId?: string;
+    videoStatus?: 'processing' | 'ready' | 'failed';
+    thumbnailUrl: string;
+    duration: number;
+    order: number;
+  }>;
+  rating?: number;
+  reviewCount?: number;
+}
+
+export interface VideoProgress {
+  id: string;
+  userId: string;
+  courseId: string;
+  videoId?: string;
+  currentTime: number;
+  duration: number;
+  completed: boolean;
+  lastWatchedAt: any;
 }

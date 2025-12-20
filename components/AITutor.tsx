@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { generateAIResponse } from '../services/gemini';
+// import { generateAIResponse } from '../services/gemini';
 import { ChatMessage } from '../types';
 import { MessageCircle, X, Send, Bot, Loader2 } from 'lucide-react';
 
@@ -39,17 +39,17 @@ const AITutor: React.FC = () => {
     setInputText('');
     setIsLoading(true);
 
-    const aiResponseText = await generateAIResponse(userMessage.text);
-
-    const aiMessage: ChatMessage = {
-      id: (Date.now() + 1).toString(),
-      sender: 'ai',
-      text: aiResponseText,
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, aiMessage]);
-    setIsLoading(false);
+    // Simulation d'une réponse AI sans appeler le service Gemini
+    setTimeout(() => {
+      const aiMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        sender: 'ai',
+        text: "Désolé, le service AI est temporairement désactivé. Je suis là pour t'aider avec les cours disponibles sur la plateforme !",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, aiMessage]);
+      setIsLoading(false);
+    }, 1000);
   };
 
   return (
