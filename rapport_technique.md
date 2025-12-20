@@ -25,6 +25,75 @@ Le frontend de Jimmy School est une application monopage (SPA) développée avec
 *   **TypeScript** : Ajoute un typage statique au JavaScript, ce qui permet de détecter les erreurs en amont du cycle de développement, d'améliorer l'autocomplétion et de rendre le code plus lisible et plus sûr.
 *   **Vite** : Sert d'outil de build et de serveur de développement. Il offre un démarrage quasi instantané et un rechargement à chaud (HMR) extrêmement rapide, ce qui améliore considérablement l'expérience de développement.
 
+### Plongée dans la Gestion de l'État : Zustand et React Query en Action
+
+Pour bien comprendre comment l'application fonctionne, il est essentiel d'analyser en détail comment l'état et les données sont gérés.
+
+#### Zustand pour l'État Global d'Authentification
+
+Le store Zustand, défini dans `stores/auth.ts`, est le cerveau de la session utilisateur. Il expose un hook `useAuth` qui permet à n'importe quel composant d'accéder à l'état de l'utilisateur et de le modifier.
+
+**Exemple d'utilisation dans `AppLayout.tsx` :**
+Le composant `AppLayout` utilise `useAuth` pour sécuriser les routes et afficher conditionnellement l'interface :
+
+```typescript
+// Dans AppLayout.tsx
+const { user } = useAuth();
+
+if (!user) {
+  // Si aucun utilisateur n'est connecté dans le store Zustand,
+  // on redirige immédiatement vers la page de connexion.
+  return <Navigate to="/auth/login" replace />;
+}
+
+// L'interface (Sidebar, etc.) est ensuite rendue en utilisant les
+// informations de `user` (par exemple, pour afficher le nom ou le rôle).
+```
+
+#### React Query pour les Données Serveur
+
+React Query est utilisé pour toutes les interactions avec des données distantes (Firestore et l'API du Worker). Chaque requête est associée à une clé de requête unique.
+
+**Exemple d'utilisation dans `CourseDetail.tsx` :**
+Ce composant est un excellent exemple de la puissance de React Query.
+
+1.  **Récupération des détails du cours :**
+    ```typescript
+    // Dans CourseDetail.tsx
+    const { id } = useParams(); // Récupère l'ID du cours depuis l'URL.
+
+    const { data: course } = useQuery({
+      queryKey: ['course', id], // Clé unique pour cette requête.
+      queryFn: async () => {
+        // La fonction qui récupère les données.
+        const docSnap = await getDoc(doc(db, 'courses', id!));
+        return { id: docSnap.id, ...docSnap.data() } as Course;
+      },
+      enabled: !!id // La requête ne s'exécute que si l'ID existe.
+    });
+    ```
+    React Query gère automatiquement l'état de chargement (`isLoading`), les erreurs (`isError`), et met en cache le résultat. Si l'utilisateur navigue vers une autre page puis revient, les données du cours seront servies instantanément depuis le cache avant d'être rafraîchies en arrière-plan.
+
+2.  **Récupération du statut d'achat de l'utilisateur :**
+    ```typescript
+    // Dans CourseDetail.tsx, en utilisant le `user` de Zustand.
+    const { user } = useAuth();
+
+    const { data: purchaseStatus } = useQuery({
+      // La clé inclut l'ID de l'utilisateur pour que la requête soit unique par utilisateur.
+      queryKey: ['purchase', id, user?.uid],
+      queryFn: async () => {
+        const q = query(collection(db, 'purchases'), where('userId', '==', user?.uid), where('courseId', '==', id));
+        const snap = await getDocs(q);
+        return !snap.empty; // Retourne true si un document d'achat existe.
+      },
+      enabled: !!user && !!id // Ne s'exécute que si l'utilisateur est connecté.
+    });
+    ```
+    Ce hook détermine si l'utilisateur a déjà acheté le cours. Le résultat (`purchaseStatus`) est ensuite utilisé pour afficher conditionnellement le bouton "Acheter le cours" ou "Regarder maintenant".
+
+Cette combinaison permet de séparer clairement la logique de l'état global de l'interface (Zustand) de la logique de gestion des données du serveur (React Query), ce qui rend le code plus modulaire, plus facile à tester et moins sujet aux bugs.
+
 ### Structure des Composants
 
 L'application est structurée de manière logique en composants réutilisables, situés dans le répertoire `components/`. On distingue plusieurs types de composants :
@@ -57,6 +126,50 @@ L'application adopte une stratégie de gestion de l'état hybride, utilisant deu
 Le backend de Jimmy School est entièrement construit sur une architecture serverless utilisant les **Cloudflare Workers**. Cette approche offre de nombreux avantages, notamment une scalabilité automatique, une haute disponibilité, des performances élevées grâce à l'exécution au plus près de l'utilisateur (Edge computing), et des coûts optimisés.
 
 Le Worker est responsable de toute la logique métier qui ne peut pas être exécutée côté client pour des raisons de sécurité ou de complexité. Il agit comme une API sécurisée qui s'interface avec des services tiers (PawaPay, Bunny.net) et la base de données Firebase.
+
+### Analyse d'un Flux API Critique : La Création d'un Paiement
+
+Pour illustrer le fonctionnement du backend, examinons en détail le processus d'achat d'un cours.
+
+1.  **Déclenchement Côté Client (`CourseDetail.tsx`)**
+    *   L'utilisateur clique sur le bouton "Acheter le cours".
+    *   La fonction `handleBuy` est appelée.
+    *   Cette fonction appelle `workerApi.createDeposit`, une fonction du service `worker.ts` qui encapsule l'appel à l'API du Worker.
+    *   Les informations nécessaires (`userId`, `courseId`, `price`) sont envoyées dans le corps de la requête POST vers l'endpoint `/deposits/create` du Worker.
+
+2.  **Traitement par le Cloudflare Worker (`handleCreateDeposit`)**
+    *   Le Worker reçoit la requête. Il vérifie d'abord que la méthode est bien `POST`.
+    *   Il valide la présence et la validité des paramètres (`userId`, `courseId`, `amount`).
+    *   Il génère un `depositId` unique (un UUID) pour cette transaction.
+    *   Il prépare un appel à l'API de PawaPay (`/v2/paymentpage`) en utilisant le `PAWAPAY_API_TOKEN` stocké dans les secrets. Le corps de cette requête contient le `depositId`, le montant, la devise, et une `returnUrl` qui ramènera l'utilisateur vers l'application après le paiement.
+    *   Le Worker envoie la requête à PawaPay.
+
+3.  **Réponse de PawaPay et Finalisation**
+    *   Si la requête à PawaPay réussit, PawaPay renvoie une `redirectUrl`, qui est l'URL de la page de paiement sécurisée.
+    *   Le Worker reçoit cette `redirectUrl` et la renvoie au client frontend dans sa réponse, avec le `depositId`.
+    *   Côté client, le `CourseDetail.tsx` reçoit la réponse. Il met à jour son état pour afficher une modale contenant un `iframe` qui charge la `paymentUrl`. L'utilisateur peut alors procéder au paiement directement dans l'interface de l'application.
+    *   Pendant ce temps, le client commence à "poller" l'endpoint `/deposits/status/{depositId}` du Worker à intervalle régulier pour vérifier l'état de la transaction. Une fois que PawaPay confirme le paiement, le Worker renvoie un statut `completed`, le client accorde l'accès au cours, et ferme la modale de paiement.
+
+### Flux de Mise en Ligne d'une Vidéo
+
+Le processus de création d'un cours et de mise en ligne d'une vidéo est un autre exemple pertinent.
+
+1.  **Déclenchement Côté Client (`CreateCourse.tsx`)**
+    *   Le formateur remplit le formulaire (titre, prix, etc.) et sélectionne un fichier vidéo et une miniature.
+    *   La miniature est directement uploadée vers Firebase Storage depuis le client.
+    *   La fonction `handleCreate` est appelée. Elle ne télécharge pas directement la vidéo.
+
+2.  **Création de la Vidéo via le Worker**
+    *   Le client appelle d'abord l'endpoint `/bunny/create` du Worker, en envoyant le titre de la vidéo.
+    *   Le Worker contacte l'API de Bunny.net pour créer une "coquille" de vidéo vide et obtient en retour un `videoId`. Ce `videoId` est renvoyé au client.
+
+3.  **Upload Direct de la Vidéo**
+    *   Avec ce `videoId`, le client appelle maintenant l'endpoint `/bunny/upload?videoId={videoId}` du Worker, mais cette fois-ci avec la méthode `PUT` et le fichier vidéo binaire dans le corps de la requête.
+    *   Le Worker agit comme un proxy sécurisé : il reçoit le flux binaire et le transfère directement à l'API d'upload de Bunny.net, en y joignant la clé d'API secrète de Bunny.net. Cela évite d'exposer la clé d'API au client.
+
+4.  **Finalisation dans Firestore**
+    *   Une fois l'upload terminé, le client crée le document du cours dans la collection `courses` de Firestore. Il y enregistre toutes les informations du cours, y compris l'URL de la miniature obtenue de Firebase Storage et le `videoId` de Bunny.net.
+    *   Un champ `videoStatus` est initialisé à `processing`. Bunny.net prendra ensuite quelques minutes pour traiter et encoder la vidéo. Des webhooks (non implémentés ici, mais une amélioration possible) pourraient être utilisés pour mettre à jour ce statut automatiquement à `ready`.
 
 ### Points d'Accès (Endpoints) Principaux
 
@@ -113,6 +226,39 @@ Dans Jimmy School, Firebase Storage est utilisé pour :
 
 *   **Miniatures de Cours** : Les formateurs uploadent les images de miniature pour leurs cours et playlists. Ces images sont stockées dans le bucket de Firebase Storage et leurs URL sont ensuite référencées dans les documents Firestore correspondants.
 *   **Documents KYC** : Lors du processus de vérification pour devenir formateur, les utilisateurs uploadent leurs pièces d'identité. Ces documents sensibles sont stockés dans un répertoire sécurisé sur Firebase Storage, avec des règles de sécurité strictes pour garantir que seuls les administrateurs autorisés peuvent y accéder.
+
+### Analyse de la Sécurité de la Base de Données
+
+Un aspect crucial de la sécurité de Firebase réside dans la définition de règles de sécurité (`Security Rules`) pour Firestore et Storage. Ces règles sont définies côté serveur et permettent de contrôler précisément qui peut lire, écrire ou supprimer des données.
+
+**Absence de Fichiers de Règles**
+
+Une recherche dans le dépôt de code n'a pas permis de trouver les fichiers `firestore.rules` ou `storage.rules`. Cela suggère l'un des deux scénarios suivants :
+
+1.  **Règles par Défaut ou Gérées via la Console** : Les règles sont peut-être gérées directement depuis la console Firebase. Souvent, les projets commencent avec des règles de développement très permissives (par exemple, `allow read, write: if true;`), ce qui représente un risque de sécurité majeur en production.
+2.  **Accès via un Backend Sécurisé** : L'architecture peut intentionnellement restreindre tout accès direct de la part des clients à la base de données, en forçant toutes les interactions à passer par le Cloudflare Worker, qui, lui, utilise un compte de service avec des privilèges élevés. C'est une approche de sécurité valide, mais elle doit être complétée par des règles qui bloquent effectivement les accès directs.
+
+**Recommandations de Sécurité**
+
+Il est impératif de définir des règles de sécurité granulaires. Voici un exemple de ce à quoi pourraient ressembler des règles de sécurité pour la collection `courses` :
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Les cours publiés sont lisibles par tout le monde.
+    match /courses/{courseId} {
+      allow read: if resource.data.isPublished == true;
+      // Seul le formateur propriétaire du cours peut le modifier.
+      // L'utilisateur doit être authentifié et son UID doit correspondre
+      // au `teacherId` du cours.
+      allow write: if request.auth != null && request.auth.uid == resource.data.teacherId;
+    }
+  }
+}
+```
+
+Sans la présence de ces fichiers de règles dans le projet, il est impossible de vérifier la posture de sécurité de la base de données, ce qui constitue un point d'attention critique à adresser.
 
 ## 5. Modèles de Données
 
@@ -187,26 +333,48 @@ L'application implémente un système d'autorisation basé sur les rôles pour c
 
 La logique de contrôle d'accès est implémentée côté client au niveau du routage (dans `App.tsx`) et de l'affichage conditionnel des composants, en se basant sur le rôle de l'utilisateur stocké dans l'état `useAuth`.
 
-## 7. Fonctionnalités Clés et Workflows
+## 7. Workflows Détaillés : Le Carnet de Route de l'Application
 
-Cette section décrit les parcours utilisateurs principaux et les fonctionnalités clés de l'application.
+Cette section remplace la précédente vue d'ensemble des fonctionnalités par une analyse séquentielle et technique des processus clés, créant un véritable "carnet de route" du fonctionnement interne de l'application.
 
-### Workflow du Formateur : De la Création à la Monétisation
+### Workflow 1 : Achat d'un Cours par un Étudiant
 
-1.  **Devenir Formateur** : Un utilisateur avec un rôle `student` peut demander à devenir formateur via la page "Devenir Formateur". Cette action met à jour son statut en `pending` et le redirige vers un processus de vérification (KYC).
-2.  **KYC (Know Your Customer)** : Le futur formateur doit soumettre une pièce d'identité. Le fichier est uploadé sur Firebase Storage et un document est créé dans la collection `kyc`. Un administrateur doit ensuite valider manuellement ces informations.
-3.  **Création de Cours** : Une fois approuvé, le formateur accède à son tableau de bord et peut commencer à créer du contenu. Le processus de création de cours implique de fournir un titre, un prix, une miniature (uploadée sur Firebase Storage) et une vidéo (uploadée sur Bunny.net via le Cloudflare Worker).
-4.  **Publication** : Après la création, le cours est initialement non publié. Le formateur peut le prévisualiser et le publier lorsqu'il est prêt. La publication le rend visible pour tous les étudiants sur la plateforme.
-5.  **Gestion des Revenus** : Chaque vente de cours crédite le portefeuille (`wallet`) du formateur (après déduction de la commission de la plateforme). Le formateur peut consulter son solde et l'historique de ses gains depuis son tableau de bord.
-6.  **Retrait des Gains (Payout)** : Le formateur peut demander un retrait de son solde. La demande est traitée par le Cloudflare Worker, qui interagit avec PawaPay pour effectuer le virement sur le numéro de téléphone mobile money du formateur.
+Ce workflow décrit chaque étape, de la décision d'achat à l'accès au contenu vidéo.
 
-### Workflow de l'Étudiant : De la Découverte à l'Apprentissage
+| Étape | Acteur | Action | Fonctions / Endpoints Clés | Interactions Base de Données / Services |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | **Utilisateur** | Clique sur "Acheter le cours" sur la page de détail. | `CourseDetail.tsx` -> `handleBuy()` | - |
+| 2 | **Frontend** | Prépare et envoie une requête au backend. | `workerApi.createDeposit(userId, courseId, price)` | Appel `POST` à `/deposits/create` du Worker. |
+| 3 | **Backend (Worker)** | Reçoit la requête, la valide, génère un `depositId`. | `handleCreateDeposit` | - |
+| 4 | **Backend (Worker)** | Construit et envoie une requête à l'API PawaPay. | `fetch('https://api.pawapay.io/v2/paymentpage')` | Communication sécurisée avec l'API PawaPay. |
+| 5 | **PawaPay** | Crée une session de paiement et retourne une `redirectUrl`. | - | - |
+| 6 | **Backend (Worker)** | Renvoie la `redirectUrl` et le `depositId` au frontend. | `jsonResponse({ paymentUrl, depositId })` | - |
+| 7 | **Frontend** | Affiche un `iframe` avec l'URL de PawaPay. | `useState` pour `setShowPayment(true)` | L'utilisateur interagit avec l'interface de PawaPay. |
+| 8 | **Frontend** | Démarre le polling pour vérifier le statut du paiement. | `pollStatus(depositId)` -> `workerApi.getDepositStatus(id)` | Appels `GET` périodiques à `/deposits/status/{depositId}`. |
+| 9 | **Backend (Worker)** | Interroge PawaPay pour le statut de la transaction. | `handleCheckDepositStatus` | Appel `GET` à `https://api.pawapay.io/v2/deposits/{depositId}`. |
+| 10 | **Frontend** | Reçoit le statut `completed`. | `grantAccess(depositId)` | - |
+| 11 | **Frontend** | Crée un document dans la collection `purchases`. | `addDoc(collection(db, 'purchases'), ...)` | **ÉCRITURE** sur Firestore : `purchases/{purchaseId}`. |
+| 12 | **Frontend** | Met à jour le compteur de ventes sur le document du cours. | `updateDoc(doc(db, 'courses', course.id), ...)` | **MISE À JOUR** sur Firestore : `courses/{courseId}`. |
+| 13 | **Frontend** | L'interface se met à jour, affichant "Regarder maintenant". | Le hook `useQuery` pour `purchaseStatus` est invalidé et se met à jour. | - |
 
-1.  **Découverte de Cours** : L'étudiant peut parcourir les cours et les playlists depuis le tableau de bord principal, utiliser la fonction de recherche, et consulter les détails de chaque cours.
-2.  **Achat de Cours** : Pour acheter un cours, l'étudiant clique sur le bouton d'achat, ce qui déclenche une requête vers le Cloudflare Worker. Le Worker crée une page de paiement PawaPay et l'étudiant est redirigé pour finaliser la transaction.
-3.  **Accès au Contenu** : Une fois le paiement confirmé, un document est créé dans la collection `purchases`, ce qui accorde à l'étudiant l'accès au cours. Il peut alors visionner la vidéo du cours.
-4.  **Visionnage** : La lecture de la vidéo se fait via un lecteur sécurisé qui charge la vidéo depuis Bunny.net. L'URL de la vidéo est signée et à durée de vie limitée pour empêcher le partage non autorisé.
-5.  **Interaction** : L'étudiant peut laisser des commentaires et des évaluations sur les cours qu'il a achetés, contribuant ainsi à la communauté et fournissant un retour d'information précieux au formateur.
+### Workflow 2 : Création d'un Cours par un Formateur
+
+Ce workflow détaille le processus en plusieurs étapes pour la création de contenu vidéo.
+
+| Étape | Acteur | Action | Fonctions / Endpoints Clés | Interactions Base de Données / Services |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | **Formateur** | Remplit le formulaire et sélectionne les fichiers. | `CreateCourse.tsx` | - |
+| 2 | **Frontend** | Gère la soumission du formulaire. | `handleCreate(e)` | - |
+| 3 | **Frontend** | **Upload de la miniature** directement sur Firebase Storage. | `uploadBytes(thumbRef, thumbFile)` -> `getDownloadURL(thumbRef)` | **ÉCRITURE** sur Firebase Storage : `/thumbnails/{fileName}`. |
+| 4 | **Frontend** | Demande la création d'une vidéo "vide" au backend. | `workerApi.createBunnyVideo(title, ...)` | Appel `POST` à `/bunny/create` du Worker. |
+| 5 | **Backend (Worker)** | Relaye la demande de création à Bunny.net. | `handleBunnyCreate` | Appel `POST` à `https://video.bunnycdn.com/library/{id}/videos`. |
+| 6 | **Bunny.net** | Crée la vidéo et retourne un `videoId`. | - | - |
+| 7 | **Backend (Worker)** | Renvoie le `videoId` au frontend. | `jsonResponse({ videoId })` | - |
+| 8 | **Frontend** | **Upload de la vidéo** en utilisant le `videoId` obtenu. | `workerApi.uploadVideo(videoId, videoFile, ...)` | Appel `PUT` à `/bunny/upload?videoId={videoId}` du Worker. |
+| 9 | **Backend (Worker)** | Agit comme un proxy et transfère le fichier vidéo. | `handleBunnyUpload` | Appel `PUT` à `https://video.bunnycdn.com/library/{id}/videos/{videoId}`. |
+| 10 | **Frontend** | Une fois l'upload terminé, crée le document du cours. | `addDoc(collection(db, 'courses'), ...)` | **ÉCRITURE** sur Firestore : `courses/{newCourseId}`. |
+| 11 | **Formateur** | Est notifié du succès et redirigé. | `alert(...)` -> `navigate('/teacher')` | - |
+| 12 | **Bunny.net** | En arrière-plan, encode et traite la vidéo. | - | Le statut de la vidéo passe de `processing` à `ready`. |
 
 ## 8. Déploiement et Environnement
 
